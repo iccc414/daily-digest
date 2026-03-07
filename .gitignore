@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.json.key
+service-account*.json
+news-letter-music-7b95d684f5a4.json
+.DS_Store

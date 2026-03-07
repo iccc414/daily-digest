@@ -1,0 +1,56 @@
+name: Daily Music Digest
+
+on:
+  schedule:
+    # UTC 22:00 = JST 翌 07:00
+    - cron: '0 22 * * *'
+  workflow_dispatch: {}  # GitHub Actions 画面から手動実行可能
+
+jobs:
+  run-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # seen-urls.json を前回実行から復元（重複排除の永続化）
+      - name: Restore seen-urls cache
+        uses: actions/cache@v4
+        with:
+          path: data/seen-urls.json
+          # キーは週単位: 1週間ごとにリセットして古いキャッシュが肥大化しないようにする
+          key: seen-urls-${{ github.run_id }}
+          restore-keys: |
+            seen-urls-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run daily digest
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          LOG_SHEET_ID: ${{ secrets.LOG_SHEET_ID }}
+        run: npm start
+
+      # 実行後の seen-urls.json をキャッシュに保存（次回実行で使用）
+      - name: Save seen-urls cache
+        if: always()  # 失敗時もキャッシュ更新
+        uses: actions/cache@v4
+        with:
+          path: data/seen-urls.json
+          key: seen-urls-${{ github.run_id }}
