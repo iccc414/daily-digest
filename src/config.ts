@@ -11,8 +11,8 @@ export const CONFIG = {
   maxArticlesPerRun: 30,    // 1回の実行で処理する最大記事数
   hoursLookback: 24,        // 過去何時間以内の記事を対象にするか
   batchSize: 5,             // Claude API に1回で渡す記事数
-  retryMaxAttempts: 3,      // APIエラー時の最大リトライ回数
-  retryBaseDelayMs: 1000,   // リトライの基本待機時間（指数バックオフ）
+  retryMaxAttempts: 5,      // APIエラー時の最大リトライ回数
+  retryBaseDelayMs: 2000,   // リトライの基本待機時間（指数バックオフ）
   fetchTimeoutMs: 12000,    // RSS フェッチのタイムアウト
 } as const;
 

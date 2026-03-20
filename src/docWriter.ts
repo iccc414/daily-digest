@@ -35,7 +35,25 @@ export async function createDailyReport(
   const drive = google.drive({ version: 'v3', auth });
   const docs = google.docs({ version: 'v1', auth });
 
-  // 1. Drive API で直接ターゲットフォルダに Google Doc を作成
+  // 1. 既存の同名ドキュメントを削除（冪等性確保）
+  const existingRes = await drive.files.list({
+    q: [
+      `name='${dateStr}'`,
+      `mimeType='application/vnd.google-apps.document'`,
+      `'${folderId}' in parents`,
+      `trashed=false`,
+    ].join(' and '),
+    fields: 'files(id)',
+    spaces: 'drive',
+  });
+  if (existingRes.data.files && existingRes.data.files.length > 0) {
+    console.log(`[docWriter] Deleting ${existingRes.data.files.length} existing document(s) named "${dateStr}"`);
+    for (const file of existingRes.data.files) {
+      await drive.files.delete({ fileId: file.id! });
+    }
+  }
+
+  // 2. Drive API で直接ターゲットフォルダに Google Doc を作成
   console.log(`[docWriter] Creating document: ${dateStr} in folder ${folderId}`);
   const createRes = await drive.files.create({
     requestBody: {
@@ -47,7 +65,7 @@ export async function createDailyReport(
   });
   const docId = createRes.data.id!;
 
-  // 2. レポート本文を batchUpdate で書き込み
+  // 3. レポート本文を batchUpdate で書き込み
   const requests = buildBatchRequests(executiveSummary, summaries);
   await docs.documents.batchUpdate({
     documentId: docId,

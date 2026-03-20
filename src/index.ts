@@ -15,8 +15,8 @@ import { summarizeArticles, buildExecutiveSummary } from './summarizer';
 import { createDailyReport } from './docWriter';
 import { getOrCreateDailyFolder } from './driveManager';
 import { logExecution } from './logger';
-import { CONFIG } from './config';
-import { RunStats } from './types';
+import { CONFIG, REPORT_CATEGORIES } from './config';
+import { RunStats, SummarizedArticle, Importance, Category } from './types';
 
 async function main(): Promise<void> {
   const startTime = Date.now();
@@ -46,11 +46,16 @@ async function main(): Promise<void> {
   console.log('\n[Phase 2] Filtering and deduplicating...');
   const recentArticles = filterByDate(rawArticles, CONFIG.hoursLookback);
   const newArticles = deduplicateArticles(recentArticles);
-  const topArticles = prioritizeArticles(newArticles, CONFIG.maxArticlesPerRun);
+  let topArticles = prioritizeArticles(newArticles, CONFIG.maxArticlesPerRun);
+
+  // フォールバック: 重複排除で全記事が消えた場合は既読を無視して直近の記事を使う
+  if (topArticles.length === 0 && recentArticles.length > 0) {
+    console.warn('[main] No new articles after dedup — falling back to recent articles (dedup bypassed)');
+    topArticles = prioritizeArticles(recentArticles, CONFIG.maxArticlesPerRun);
+  }
 
   if (topArticles.length === 0) {
-    console.warn('[main] No new articles found after filtering. Skipping report generation.');
-    // 空レポートは生成しない（正常終了）
+    console.warn('[main] No articles found at all. Skipping report generation.');
     return;
   }
 
@@ -58,14 +63,26 @@ async function main(): Promise<void> {
 
   // ---- Phase 3: LLM 要約 ----
   console.log('\n[Phase 3] Summarizing articles with Claude...');
-  let summaries;
+  let summaries: SummarizedArticle[];
   try {
     summaries = await summarizeArticles(topArticles);
+    if (summaries.length === 0) throw new Error('summarizeArticles returned 0 results');
   } catch (e) {
-    const msg = `Summarization failed: ${e}`;
-    console.error(msg);
+    const msg = `Summarization failed, using raw articles as fallback: ${e}`;
+    console.warn(msg);
     errors.push(msg);
-    throw new Error(msg);
+    // フォールバック: Claude API が完全失敗しても RSS の生データでドキュメントを生成する
+    summaries = topArticles.map((a) => ({
+      title: a.title,
+      summary: a.description || '（本文なし）',
+      importance: 'medium' as Importance,
+      category: (REPORT_CATEGORIES.includes(a.source.category as Category)
+        ? a.source.category
+        : 'ビジネス') as Category,
+      signals: '（AI分析なし）',
+      url: a.url,
+      sourceName: a.source.name,
+    }));
   }
 
   let executiveSummary;
@@ -86,19 +103,31 @@ async function main(): Promise<void> {
     };
   }
 
-  // ---- Phase 4: Google Doc 生成 ----
+  // ---- Phase 4: Google Doc 生成（最大3回リトライ） ----
   console.log('\n[Phase 4] Creating Google Doc...');
   let docUrl = '';
-  try {
-    const folderId = await getOrCreateDailyFolder(dateStr);
-    const result = await createDailyReport(dateStr, folderId, executiveSummary, summaries);
-    docUrl = result.docUrl;
-    console.log(`[main] Doc URL: ${docUrl}`);
-  } catch (e) {
-    const msg = `Doc creation failed: ${e}`;
-    console.error(msg);
-    errors.push(msg);
-    throw new Error(msg);
+  {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const folderId = await getOrCreateDailyFolder(dateStr);
+        const result = await createDailyReport(dateStr, folderId, executiveSummary, summaries);
+        docUrl = result.docUrl;
+        console.log(`[main] Doc URL: ${docUrl}`);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        const msg = `Doc creation attempt ${attempt}/3 failed: ${e}`;
+        console.error(msg);
+        errors.push(msg);
+        if (attempt < 3) {
+          console.log(`[main] Waiting ${attempt * 15}s before retry...`);
+          await new Promise((r) => setTimeout(r, attempt * 15_000));
+        }
+      }
+    }
+    if (lastError) throw new Error(`Doc creation failed after 3 attempts: ${lastError}`);
   }
 
   // ---- Phase 5: 既読 URL を記録 ----

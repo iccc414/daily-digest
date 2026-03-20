@@ -51,22 +51,33 @@ export async function fetchAllSources(): Promise<Article[]> {
 }
 
 /**
- * 単一ソースをフェッチしてパース
+ * 単一ソースをフェッチしてパース（最大3回リトライ）
  */
 async function fetchSource(source: Source): Promise<Article[]> {
-  const feed = await parser.parseURL(source.url);
-
-  return (feed.items ?? [])
-    .map((item) => ({
-      title: (item.title ?? '').trim(),
-      url: (item.link ?? item.guid ?? '').trim(),
-      description: cleanDescription(
-        item.contentSnippet ?? item.content ?? item['summary'] ?? item.title ?? ''
-      ),
-      pubDate: item.pubDate ? new Date(item.pubDate) : new Date(0),
-      source,
-    }))
-    .filter((a) => a.url && a.title);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const feed = await parser.parseURL(source.url);
+      return (feed.items ?? [])
+        .map((item) => ({
+          title: (item.title ?? '').trim(),
+          url: (item.link ?? item.guid ?? '').trim(),
+          description: cleanDescription(
+            item.contentSnippet ?? item.content ?? item['summary'] ?? item.title ?? ''
+          ),
+          pubDate: item.pubDate ? new Date(item.pubDate) : new Date(0),
+          source,
+        }))
+        .filter((a) => a.url && a.title);
+    } catch (e) {
+      lastError = e;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 5000 * attempt));
+        console.warn(`[fetcher] Retry ${attempt}/3 for ${source.name}`);
+      }
+    }
+  }
+  throw lastError;
 }
 
 /**
